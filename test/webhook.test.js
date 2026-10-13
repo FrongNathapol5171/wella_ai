@@ -4,6 +4,7 @@ import { createHmac } from 'node:crypto';
 import { createApp } from '../src/app.js';
 import { createLineClient, verifySignature } from '../src/line.js';
 import { event } from './helpers.js';
+import { toPlainText, formatLineText } from '../src/plain-text.js';
 const secret='test-secret';
 const signature=body=>createHmac('sha256',secret).update(body).digest('base64');
 async function appFor(t,overrides={}) {
@@ -49,4 +50,16 @@ test('LINE client sends plain text even if model returns Markdown',async()=>{
   const client=createLineClient('token',async(_url,options)=>{text=JSON.parse(options.body).messages[0].text;return {ok:true};});
   await client.reply('reply','# สุขภาพ\n**น้ำหนัก** 65.2 กก.\n- ลองเพิ่มผักนะคะ\n1. เดินสบาย ๆ\n| รายการ | ค่า |\n| --- | --- |\n| น้ำหนัก | 65.2 |\n`บันทึก`');
   assert.ok(!/[#*`|]/.test(text));assert.ok(!/^\s*[-]|^\d+\.\s/m.test(text));assert.match(text,/65\.2 กก\./);assert.match(text,/น้ำหนัก \/ 65\.2/);
+});
+test('Markdown cleanup preserves blank lines between paragraphs and records',()=>{
+  assert.equal(toPlainText('# สรุป\n\n- อาหาร 60 บาท\n- เดินทาง 120 บาท\n\n## แนะนำ\n\nลองวางแผนค่าใช้จ่ายค่ะ'),
+    'สรุป\n\nอาหาร 60 บาท\nเดินทาง 120 บาท\n\nแนะนำ\n\nลองวางแผนค่าใช้จ่ายค่ะ');
+});
+test('LINE payload separates run-on replies and preserves amounts and existing paragraphs',async()=>{
+  let text;
+  const client=createLineClient('token',async(_url,options)=>{text=JSON.parse(options.body).messages[0].text;return {ok:true};});
+  await client.reply('reply','น้ำหนักล่าสุด 65.2 กก. ค่ะ ลองเพิ่มผักในมื้อต่อไปนะคะ อยากเน้นสุขภาพด้านไหนคะ');
+  assert.equal(text,'น้ำหนักล่าสุด 65.2 กก. ค่ะ\n\nลองเพิ่มผักในมื้อต่อไปนะคะ\n\nอยากเน้นสุขภาพด้านไหนคะ');
+  assert.equal(formatLineText(text),text);
+  assert.equal(formatLineText('บันทึกเรียบร้อยค่ะ'),'บันทึกเรียบร้อยค่ะ');
 });
