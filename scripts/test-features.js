@@ -28,6 +28,7 @@ const context={as_of:localNow,period:overview.query,
   weight_context:{latest:{weight_kg:'65.200',entry_date:'2026-09-01'},previous:null,change_kg:null,days_since_update:42,is_stale:true,stale_after_days:7}};
 const reply=formatLineText(await llm.overview({question,context}));
 assert.ok(reply.includes('\n\n'));
+assert.match(reply,/^• /m);assert.match(reply,/สรุป/);
 assert.match(reply.replace(/,/g,''),/1300/);assert.match(reply,/ประมาณ|ประเมิน/);assert.match(reply,/อัปเดต|ชั่ง|วัด/);
 assert.ok(!/[#*`|]/.test(reply));
 console.log('PASS: all-type overview, approximate food energy, weight-update reminder and LINE layout');
