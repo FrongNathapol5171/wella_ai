@@ -17,7 +17,7 @@ test('real MySQL: automatic schema, dates, isolation, deletion, rollback and ded
   try {
     await db.init();created=true;await db.init();
     await db.transaction(async c=>{
-      await c.query('ALTER TABLE entries DROP COLUMN calories_source, DROP COLUMN calorie_note');
+      await c.query('ALTER TABLE entries DROP COLUMN calories_source, DROP COLUMN calorie_note, DROP COLUMN protein_grams, DROP COLUMN protein_source, DROP COLUMN protein_note');
       await c.execute("INSERT INTO entries (line_user_id,event_id,item_index,type,title,duration_minutes,calories,occurred_at) VALUES ('legacy-user','legacy',0,'exercise','walk',30,100,'2026-10-13 12:00:00')");
       await migrateCalories(c);await migrateCalories(c);
       const [[legacy]]=await c.execute("SELECT calories,calories_source FROM entries WHERE line_user_id = 'legacy-user'");
@@ -77,31 +77,36 @@ test('real MySQL: automatic schema, dates, isolation, deletion, rollback and ded
       await insertRecords(c,'overview-user','many-expenses',Array.from({length:65},()=>record({amount:10})));
       await insertRecords(c,'overview-user','income',[record({type:'income',amount:1000})]);
       await insertRecords(c,'overview-user','foods',[
-        record({type:'food',title:'ข้าวผัด',amount:null,category:null,quantity:2,unit:'จาน',calories:1200,calories_source:'estimated',calorie_note:'ขนาดทั่วไป 2 จาน'}),
-        record({type:'food',title:'นม',amount:null,category:null,quantity:1,unit:'กล่อง',calories:100}),
+        record({type:'food',title:'ข้าวผัด',amount:null,category:null,quantity:2,unit:'จาน',calories:1200,calories_source:'estimated',calorie_note:'ขนาดทั่วไป 2 จาน',protein_grams:40,protein_source:'estimated',protein_note:'ขนาดทั่วไป 2 จาน'}),
+        record({type:'food',title:'นม',amount:null,category:null,quantity:1,unit:'กล่อง',calories:100,protein_grams:10}),
         record({type:'food',title:'อาหาร',amount:null,category:null,quantity:1,unit:'หน่วย'})
       ]);
       await insertRecords(c,'overview-user','exercise',[record({type:'exercise',title:'วิ่ง',amount:null,category:null,duration_minutes:30,calories:300})]);
       await insertRecords(c,'overview-user','old-weight',[record({type:'weight',title:'น้ำหนัก',amount:null,category:null,weight_kg:65.2,occurred_at:'2026-09-01 12:00:00'})]);
       const totals=await getDailyTotals(c,'overview-user','2026-10-13');
       assert.equal(totals.expense_total,'650.00');assert.equal(totals.food_calories_total,'1300.00');assert.equal(totals.food_estimated_count,1);assert.equal(totals.food_unknown_count,1);
+      assert.equal(totals.food_protein_total_g,'50.00');assert.equal(totals.food_protein_estimated_count,1);assert.equal(totals.food_protein_unknown_count,1);
       const other=await getDailyTotals(c,'user-B','2026-10-13');assert.equal(other.expense_total,'100.00');assert.equal(other.food_calories_total,'0.00');
       const overview=await getOverviewContext(c,'overview-user',query({mode:'summary',date_from:'2026-10-13',date_to:'2026-10-13'}),'2026-10-13 12:00:00');
       assert.equal(overview.result.total_count,70);assert.equal(overview.result.summary.find(r=>r.type==='expense').amount_total,'650.00');
       assert.ok(overview.samples.some(r=>r.type==='food'));assert.equal(overview.samples.filter(r=>r.type==='expense').length,5);
       assert.equal(overview.weight_context.days_since_update,42);assert.equal(overview.weight_context.is_stale,true);
+      assert.equal(overview.weight_context.protein_target_g,97.8);assert.equal(overview.result.summary.find(r=>r.type==='food').protein_total_g,'50.00');
       assert.equal(overview.result.summary.some(r=>r.type==='weight'),false);
       await migrateCalories(c);
       assert.equal((await queryRecords(c,'overview-user',query({type:'food'}))).rows.find(r=>r.title==='ข้าวผัด').calories_source,'estimated');
     });
     const foodService=createService({db,llm:{
       plan:async()=>plan({records:[record({type:'food',title:'ข้าวผัด',amount:null,category:null,source_quote:'กินข้าวผัด'})]}),
-      estimateCalories:async()=>({items:[{index:0,calories:600,note:'สมมติขนาดทั่วไป 1 ที่ค่ะ'}]})
+      estimateCalories:async()=>({items:[{index:0,calories:600,note:'สมมติขนาดทั่วไป 1 ที่ค่ะ',protein_grams:15,protein_note:'ข้าวผัดขนาดทั่วไปค่ะ'}]})
     }});
     const foodEvent=event({webhookEventId:'food-feedback',message:{id:'ff1',type:'text',text:'กินข้าวผัด'}});
     assert.match((await foodService.process(foodEvent)).reply,/กินจากที่บันทึกรวม ประมาณ 600 kcal/);
     await foodService.process(foodEvent);
-    await db.transaction(async c=>assert.equal((await getDailyTotals(c,'user-A','2026-10-13')).food_calories_total,'600.00'));
+    await db.transaction(async c=>{
+      const daily=await getDailyTotals(c,'user-A','2026-10-13');assert.equal(daily.food_calories_total,'600.00');assert.equal(daily.food_protein_total_g,'15.00');
+      assert.equal((await getDailyTotals(c,'user-B','2026-10-13')).food_protein_total_g,'0.00');
+    });
   } finally {
     await db.close();
     if(created) {

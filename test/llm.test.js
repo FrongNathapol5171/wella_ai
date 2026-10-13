@@ -6,6 +6,28 @@ import { plan } from './helpers.js';
 test('both system prompts are English and require Thai responses',()=>{
   for(const prompt of [SYSTEM_PROMPT,ANSWER_PROMPT,ADVICE_PROMPT,OVERVIEW_PROMPT,CALORIE_ESTIMATE_PROMPT]){assert.ok(!/[\u0E00-\u0E7F]/.test(prompt));assert.match(prompt,/Thai/);}
 });
+for(const mode of ['responses','chat']) {
+  test(`${mode} retries token-limited output and returns the complete uncut answer`,async()=>{
+    const budgets=[];const complete='• '+ 'ก'.repeat(2800)+'\n\nสรุป: ครบค่ะ';
+    const create=async params=>{
+      budgets.push(params.max_output_tokens ?? params.max_completion_tokens);
+      const limited=budgets.length===1;
+      return mode==='chat'?{choices:[{finish_reason:limited?'length':'stop',message:{content:limited?'คำตอบที่ขาด':complete}}]}:
+        {status:limited?'incomplete':'completed',incomplete_details:limited?{reason:'max_output_tokens'}:null,output_text:limited?'คำตอบที่ขาด':complete};
+    };
+    const client=mode==='chat'?{chat:{completions:{create}}}:{responses:{create}};
+    const llm=createLlm({OPENAI_API_MODE:mode,OPENAI_MODEL:'test'},client);
+    assert.equal(await llm.overview({question:'สรุป',context:{}}),complete);
+    assert.deepEqual(budgets,[2400,4800]);
+  });
+  test(`${mode} never returns a partial answer when both attempts are token-limited`,async()=>{
+    let calls=0;
+    const create=async()=>{calls++;return mode==='chat'?{choices:[{finish_reason:'length',message:{content:'ขาด'}}]}:{status:'incomplete',output_text:'ขาด'};};
+    const client=mode==='chat'?{chat:{completions:{create}}}:{responses:{create}};
+    await assert.rejects(createLlm({OPENAI_API_MODE:mode},client).answer({question:'ถาม',result:{}}),/incomplete/);
+    assert.equal(calls,2);
+  });
+}
 for(const mode of ['responses','chat']) test(`SDK uses custom base URL and structured ${mode} output`,async t=>{
   const requests=[];
   const server=createServer(async(req,res)=>{
@@ -13,7 +35,7 @@ for(const mode of ['responses','chat']) test(`SDK uses custom base URL and struc
     const json=JSON.parse(body);requests.push({url:req.url,body:json});
     const structured=Boolean(json.text?.format || json.response_format);
     const name=json.text?.format?.name ?? json.response_format?.json_schema?.name;
-    const text=structured?JSON.stringify(name==='calorie_estimates'?{items:[{index:0,calories:600,note:'ขนาดทั่วไป 1 ที่ค่ะ'}]}:plan()):'รายจ่ายรวม 60 บาท';
+    const text=structured?JSON.stringify(name==='calorie_estimates'?{items:[{index:0,calories:600,note:'ขนาดทั่วไป 1 ที่ค่ะ',protein_grams:null,protein_note:null}]}:plan()):'รายจ่ายรวม 60 บาท';
     res.setHeader('Content-Type','application/json');
     res.end(JSON.stringify(mode==='responses'?{
       id:'resp_test',object:'response',status:'completed',output:[{type:'message',id:'msg_test',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[]}]}]

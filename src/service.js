@@ -24,7 +24,7 @@ export function createService({db,llm,timeZone='Asia/Bangkok',repo=repository}) 
             case 'help': reply=HELP_REPLY;nextPending=pending;break;
             case 'record': {
               const localNow=localTimestamp(event.timestamp,timeZone);
-              const missing=plan.records.map((r,index)=>({...r,index})).filter(r=>['food','exercise'].includes(r.type) && r.calories===null);
+              const missing=plan.records.map((r,index)=>({...r,index})).filter(r=>(['food','exercise'].includes(r.type) && r.calories===null) || (r.type==='food' && r.protein_grams===null));
               if(missing.length && llm.estimateCalories) {
                 const weight=missing.some(r=>r.type==='exercise')?await repo.getWeightContext(connection,userId,localNow):null;
                 try {
@@ -34,16 +34,21 @@ export function createService({db,llm,timeZone='Asia/Bangkok',repo=repository}) 
                     if(seen.has(item.index) || !missing.some(r=>r.index===item.index)) throw new Error('Invalid estimate index');
                     seen.add(item.index);
                     if(item.calories!==null && !item.note?.trim()) throw new Error('Missing calorie assumptions');
+                    const record=plan.records[item.index];
+                    if(item.protein_grams!==null && (record.type!=='food' || !item.protein_note?.trim())) throw new Error('Invalid protein estimate');
                   }
-                  for(const item of estimates.items) if(item.calories!==null) {
-                    Object.assign(plan.records[item.index],{calories:Math.round(item.calories),calories_source:'estimated',calorie_note:item.note});
+                  for(const item of estimates.items) {
+                    const record=plan.records[item.index];
+                    if(item.calories!==null && record.calories===null) Object.assign(record,{calories:Math.round(item.calories),calories_source:'estimated',calorie_note:item.note});
+                    if(item.protein_grams!==null && record.protein_grams===null) Object.assign(record,{protein_grams:Math.round(item.protein_grams*100)/100,protein_source:'estimated',protein_note:item.protein_note});
                   }
                 } catch { /* Save the actual record even if optional estimation fails; never store zero as unknown. */ }
               }
               await repo.insertRecords(connection,userId,eventId,plan.records);
-              const needsTotals=plan.records.some(r=>['income','expense','food'].includes(r.type));
+              const needsTotals=plan.records.some(r=>['income','expense','food','weight'].includes(r.type));
               const totals=needsTotals?await repo.getDailyTotals(connection,userId,localNow.slice(0,10)):null;
-              reply=recordFeedback(plan.records,totals); break;
+              const weightContext=plan.records.some(r=>['food','weight'].includes(r.type))?await repo.getWeightContext(connection,userId,localNow):null;
+              reply=recordFeedback(plan.records,totals,weightContext); break;
             }
             case 'delete': {
               const count=await repo.deleteLatest(connection,userId,plan.deletion);

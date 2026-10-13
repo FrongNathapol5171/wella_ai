@@ -6,7 +6,8 @@ export const recordSchema = z.object({
   type:typeSchema, occurred_at:z.string(), title:z.string().min(1).max(255), details:text,
   amount:number, category:z.string().max(100).nullable(), quantity:number, unit:z.string().max(50).nullable(),
   duration_minutes:number, calories:number, weight_kg:number, source_quote:z.string().min(1).max(5000),
-  calories_source:z.enum(['provided','estimated']).nullable(),calorie_note:z.string().max(500).nullable()
+  calories_source:z.enum(['provided','estimated']).nullable(),calorie_note:z.string().max(500).nullable(),
+  protein_grams:number,protein_source:z.enum(['provided','estimated']).nullable(),protein_note:z.string().max(500).nullable()
 }).strict();
 export const querySchema = z.object({
   type:typeSchema.nullable(), mode:z.enum(['list','summary','latest']), date_from:z.string().nullable(), date_to:z.string().nullable(),
@@ -20,5 +21,5 @@ export const planSchema = z.object({
 
 export const calorieEstimateSchema=z.object({items:z.array(z.object({
   index:z.number().int().min(0).max(19),calories:z.number().finite().min(0).max(100000).nullable(),
-  note:z.string().max(500).nullable()
+  note:z.string().max(500).nullable(),protein_grams:z.number().finite().min(0).max(100000).nullable(),protein_note:z.string().max(500).nullable()
 }).strict()).max(20)}).strict();

@@ -22,6 +22,15 @@ export function validatePlan(input,text) {
       if (!text.includes(r.source_quote)) throw new InputError('ข้อมูลไม่ตรงข้อความ กรุณาระบุรายการอีกครั้ง');
       if (r.type!=='weight' && !r.source_quote.includes(r.title)) throw new InputError('กรุณาระบุชื่อรายการให้ชัดเจน');
       if (r.details!==null && !r.source_quote.includes(r.details)) throw new InputError('รายละเอียดไม่ตรงข้อความ กรุณาส่งใหม่');
+      if(r.type!=='food' && [r.protein_grams,r.protein_source,r.protein_note].some(v=>v!==null)) throw new InputError('บันทึกโปรตีนได้เฉพาะรายการอาหาร');
+      if(r.protein_grams===null) {
+        if(r.protein_source!==null || r.protein_note!==null) throw new InputError('ข้อมูลโปรตีนไม่ครบ กรุณาส่งรายการอีกครั้ง');
+      } else {
+        if(r.protein_grams<0 || r.protein_grams>100000 || !r.protein_source) throw new InputError('กรุณาระบุโปรตีนเป็นกรัมให้ถูกต้อง');
+        const perUnit=/ต่อ|per/i.test(r.source_quote) && hasNumber(r.protein_grams,r.source_quote,r.quantity??1);
+        if(r.protein_source==='provided' && (!/โปรตีน|protein/i.test(r.source_quote) || (!hasNumber(r.protein_grams,r.source_quote) && !perUnit))) throw new InputError('โปรตีนที่ระบุไม่ตรงข้อความ');
+        if(r.protein_source==='estimated' && !r.protein_note?.trim()) throw new InputError('ค่าประเมินโปรตีนต้องมีคำอธิบาย');
+      }
       const allowed={income:['amount','category'],expense:['amount','category'],food:['quantity','unit','calories'],exercise:['duration_minutes','calories'],weight:['weight_kg']}[r.type];
       for (const field of ['amount','category','quantity','unit','duration_minutes','calories','weight_kg']) {
         if (!allowed.includes(field) && r[field]!==null) throw new InputError('พบข้อมูลผิดประเภท กรุณาส่งรายการอีกครั้ง');

@@ -16,7 +16,7 @@ function setup({state={pending_text:null,pending_at:null},existing,planner=async
     deleteLatest:async(_c,u)=>{assert.equal(u,'user-A');return 2;},queryRecords:async(_c,u)=>{assert.equal(u,'user-A');return result;},
     getAdviceContext:async(_c,u,options)=>{assert.equal(u,'user-A');return {topic:options.topic,as_of:options.localNow,records:result};},
     getDailyTotals:async(_c,u,date)=>{assert.equal(u,'user-A');assert.equal(date,'2026-10-13');assert.ok(saves>0);return totals;},
-    getWeightContext:async(_c,u)=>{assert.equal(u,'user-A');return {latest:{weight_kg:'65.2'},is_stale:false};},
+    getWeightContext:async(_c,u)=>{assert.equal(u,'user-A');return {latest:{weight_kg:'65.2',entry_date:'2026-10-13'},is_stale:false,protein_target_g:97.8};},
     getOverviewContext:async(_c,u,q)=>{assert.equal(u,'user-A');return {period:q,result};}};
   const service=createService({db:{transaction:async work=>work(connection)},repo,llm:{plan:planner,advise:advisor,estimateCalories:estimator,overview,answer:async()=>{answers++;return 'รวม 60 บาท';}}});
   return {service,calls,saved,get saves(){return saves;},get answers(){return answers;}};
@@ -86,7 +86,7 @@ test('capabilities question returns the complete plain-text menu and preserves p
 test('food estimate stores its provenance and returns daily food energy, not exercise energy',async()=>{
   const food=record({type:'food',title:'ข้าวผัด',amount:null,category:null,quantity:2,unit:'จาน',source_quote:'กินข้าวผัด 2 จาน'});
   const s=setup({planner:async()=>plan({records:[food]}),estimator:async({records,weight})=>{
-    assert.equal(weight,null);assert.equal(records[0].quantity,2);return {items:[{index:0,calories:1200,note:'ใช้ข้าวผัดขนาดทั่วไป 2 จาน เป็นค่าประเมินค่ะ'}]};
+    assert.equal(weight,null);assert.equal(records[0].quantity,2);return {items:[{index:0,calories:1200,note:'ใช้ข้าวผัดขนาดทั่วไป 2 จาน เป็นค่าประเมินค่ะ',protein_grams:null,protein_note:null}]};
   },totals:{date:'2026-10-13',expense_total:'0',food_calories_total:'1800.00',food_estimated_count:2,food_unknown_count:1}});
   const result=await s.service.process(event({message:{type:'text',id:'food',text:'กินข้าวผัด 2 จาน'}}));
   assert.equal(s.saved[0].calories,1200);assert.equal(s.saved[0].calories_source,'estimated');assert.equal(s.saved[0].details,null);
@@ -94,11 +94,13 @@ test('food estimate stores its provenance and returns daily food energy, not exe
 });
 test('provided food calories are preserved and never estimated again',async()=>{
   const food=record({type:'food',title:'นม',amount:null,category:null,quantity:1,unit:'หน่วย',calories:100,source_quote:'กินนม 100 แคล'});
-  const s=setup({planner:async()=>plan({records:[food]}),estimator:()=>assert.fail('provided calories were re-estimated')});
+  let estimated=false;
+  const s=setup({planner:async()=>plan({records:[food]}),estimator:async()=>{estimated=true;return {items:[{index:0,calories:900,note:'must not replace supplied calories',protein_grams:8,protein_note:'นมขนาดทั่วไป 1 กล่องค่ะ'}]};}});
   await s.service.process(event({message:{type:'text',id:'milk',text:'กินนม 100 แคล'}}));
   assert.equal(s.saved[0].calories,100);assert.equal(s.saved[0].calories_source,'provided');
+  assert.equal(estimated,true);assert.equal(s.saved[0].protein_grams,8);assert.equal(s.saved[0].protein_source,'estimated');
 });
-for(const estimator of [async()=>{throw new Error('timeout');},async()=>({items:[{index:9,calories:600,note:'invalid index'}]})])
+for(const estimator of [async()=>{throw new Error('timeout');},async()=>({items:[{index:9,calories:600,note:'invalid index',protein_grams:null,protein_note:null}]})])
 test('optional estimator failure does not lose actual food records or store invented zero',async()=>{
   const s=setup({planner:async()=>plan({records:[record({type:'food',title:'ข้าวผัด',amount:null,category:null,source_quote:'กินข้าวผัด'})]}),estimator,
     totals:{date:'2026-10-13',expense_total:'0',food_calories_total:'0',food_estimated_count:0,food_unknown_count:1}});
@@ -107,7 +109,7 @@ test('optional estimator failure does not lose actual food records or store inve
 });
 test('exercise estimates receive the trusted latest weight and duration',async()=>{
   const s=setup({planner:async()=>plan({records:[record({type:'exercise',title:'วิ่ง',amount:null,category:null,duration_minutes:30,source_quote:'วิ่ง 30 นาที'})]}),
-    estimator:async({records,weight})=>{assert.equal(weight.latest.weight_kg,'65.2');assert.equal(records[0].duration_minutes,30);return {items:[{index:0,calories:250,note:'ใช้ค่าน้ำหนักล่าสุดและความหนักปานกลางค่ะ'}]};}});
+    estimator:async({records,weight})=>{assert.equal(weight.latest.weight_kg,'65.2');assert.equal(records[0].duration_minutes,30);return {items:[{index:0,calories:250,note:'ใช้ค่าน้ำหนักล่าสุดและความหนักปานกลางค่ะ',protein_grams:null,protein_note:null}]};}});
   const r=await s.service.process(event({message:{type:'text',id:'ex',text:'วิ่ง 30 นาที'}}));
   assert.equal(s.saved[0].calories_source,'estimated');assert.match(r.reply,/ประเมิน 250 kcal/);assert.ok(!r.reply.includes('กินจากที่บันทึก'));
 });
@@ -115,4 +117,21 @@ test('overview reads all types for the requested range before generating advice'
   const s=setup({planner:async()=>plan({intent:'overview',records:[],query:query({type:'expense',mode:'summary',date_from:'2026-10-01',date_to:'2026-10-13'})}),
     overview:async({context})=>{assert.equal(context.period.type,null);assert.equal(context.period.date_from,'2026-10-01');assert.equal(context.period.date_to,'2026-10-13');return 'สรุปภาพรวมและคำแนะนำค่ะ';}});
   assert.match((await s.service.process(event())).reply,/ภาพรวม/);assert.equal(s.saves,0);
+});
+test('explicit protein is saved unchanged and displayed against the 1.5 g/kg goal',async()=>{
+  let called=false;
+  const food=record({type:'food',title:'นม',amount:null,category:null,quantity:1,unit:'หน่วย',calories:100,protein_grams:30,source_quote:'กินนม 100 แคล โปรตีน 30 กรัม'});
+  const s=setup({planner:async()=>plan({records:[food]}),estimator:async()=>{called=true;return {items:[]};},
+    totals:{date:'2026-10-13',expense_total:'0',food_calories_total:'100',food_estimated_count:0,food_unknown_count:0,food_protein_total_g:'30.00',food_protein_estimated_count:0,food_protein_unknown_count:0}});
+  const r=await s.service.process(event({message:{type:'text',id:'protein',text:food.source_quote}}));
+  assert.equal(called,false);assert.equal(s.saved[0].protein_grams,30);assert.equal(s.saved[0].protein_source,'provided');
+  assert.match(r.reply,/โปรตีนวันนี้ 30 กรัม/);assert.match(r.reply,/97\.8 กรัม\/วัน/);assert.match(r.reply,/67\.8 กรัมถึงเป้า/);
+});
+test('missing food protein is estimated and labelled without changing food details',async()=>{
+  const food=record({type:'food',title:'ข้าวผัด',amount:null,category:null,quantity:1,unit:'หน่วย',source_quote:'กินข้าวผัด'});
+  const s=setup({planner:async()=>plan({records:[food]}),estimator:async()=>({items:[{index:0,calories:600,note:'ขนาดทั่วไป 1 ที่ค่ะ',protein_grams:15,protein_note:'ข้าวผัดขนาดทั่วไปมีไข่ค่ะ'}]}),
+    totals:{date:'2026-10-13',expense_total:'0',food_calories_total:'600',food_estimated_count:1,food_unknown_count:0,food_protein_total_g:'15',food_protein_estimated_count:1,food_protein_unknown_count:1}});
+  const r=await s.service.process(event({message:{type:'text',id:'p',text:food.source_quote}}));
+  assert.equal(s.saved[0].protein_source,'estimated');assert.equal(s.saved[0].protein_grams,15);assert.equal(s.saved[0].details,null);
+  assert.match(r.reply,/โปรตีนวันนี้ประมาณ 15 กรัม/);assert.match(r.reply,/ยอดรวมยังไม่ครบ/);
 });

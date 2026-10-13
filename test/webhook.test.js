@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { createApp } from '../src/app.js';
-import { createLineClient, verifySignature } from '../src/line.js';
+import { createLineClient, verifySignature, splitLineMessages } from '../src/line.js';
 import { event } from './helpers.js';
 import { toPlainText, formatLineText } from '../src/plain-text.js';
 const secret='test-secret';
@@ -43,7 +43,15 @@ test('LINE client emits Thai text with bounded length',async()=>{
   let request;
   const client=createLineClient('token',async(url,options)=>{request={url,...options};return {ok:true};});
   await client.reply('reply','ก'.repeat(5000));const body=JSON.parse(request.body);
-  assert.equal(body.messages[0].text.length,4500);assert.equal(request.headers.Authorization,'Bearer token');
+  assert.equal(body.messages[0].text.length,4500);assert.equal(body.messages.length,2);
+  assert.equal(body.messages.map(m=>m.text).join(''),'ก'.repeat(5000));assert.equal(request.headers.Authorization,'Bearer token');
+});
+test('long LINE replies preserve every character and keep emoji pairs intact',()=>{
+  const text='ก'.repeat(4499)+'🌸'+'ข'.repeat(4000)+'\n\nสรุป: ส่งครบค่ะ';
+  const parts=splitLineMessages(text);
+  assert.equal(parts.map(p=>p.text).join(''),text);
+  assert.ok(parts.every(p=>p.text.length<=4500 && !/[\uD800-\uDBFF]$/.test(p.text)));
+  assert.throws(()=>splitLineMessages('ก'.repeat(22501)),/limits/);
 });
 test('LINE client sends plain text even if model returns Markdown',async()=>{
   let text;

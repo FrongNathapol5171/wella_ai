@@ -8,7 +8,7 @@ function filter(userId,q) {
   return {where:clauses.join(' AND '),params};
 }
 export async function insertRecords(connection,userId,eventId,records) {
-  const fields=['type','title','details','amount','category','quantity','unit','duration_minutes','calories','calories_source','calorie_note','weight_kg','occurred_at'];
+  const fields=['type','title','details','amount','category','quantity','unit','duration_minutes','calories','calories_source','calorie_note','protein_grams','protein_source','protein_note','weight_kg','occurred_at'];
   for(const [index,record] of records.entries()) {
     await connection.execute(`INSERT INTO entries (line_user_id, event_id, item_index, ${fields.join(', ')}) VALUES (${Array(fields.length+3).fill('?').join(', ')})`,
       [userId,eventId,index,...fields.map(f=>record[f])]);
@@ -21,10 +21,12 @@ export async function deleteLatest(connection,userId,{type,count}) {
 }
 export async function queryRecords(connection,userId,q) {
   const {where,params}=filter(userId,q),limit=q.mode==='latest'?1:q.limit;
-  const [rows]=await connection.execute(`SELECT id, type, title, details, amount, category, quantity, unit, duration_minutes, calories, calories_source, calorie_note, weight_kg, occurred_at, entry_date, entry_time, entry_year, entry_month, entry_day, weekday_text FROM entries WHERE ${where} ORDER BY occurred_at DESC, id DESC LIMIT ${limit}`,params);
+  const [rows]=await connection.execute(`SELECT id, type, title, details, amount, category, quantity, unit, duration_minutes, calories, calories_source, calorie_note,
+    protein_grams, protein_source, protein_note, weight_kg, occurred_at, entry_date, entry_time, entry_year, entry_month, entry_day, weekday_text FROM entries WHERE ${where} ORDER BY occurred_at DESC, id DESC LIMIT ${limit}`,params);
   const [summary]=await connection.execute(`SELECT type, COUNT(*) AS count, SUM(amount) AS amount_total,
     SUM(duration_minutes) AS minutes_total, SUM(calories) AS calories_total, COUNT(calories) AS calories_known_count,
-    SUM(calories_source = 'estimated') AS calories_estimated_count, SUM(calories IS NULL) AS calories_unknown_count
+    SUM(calories_source = 'estimated') AS calories_estimated_count, SUM(calories IS NULL) AS calories_unknown_count,
+    SUM(protein_grams) AS protein_total_g, SUM(protein_source = 'estimated') AS protein_estimated_count, SUM(protein_grams IS NULL) AS protein_unknown_count
     FROM entries WHERE ${where} GROUP BY type`,params);
   const [categories]=await connection.execute(`SELECT type, category, COUNT(*) AS count, SUM(amount) AS amount_total
     FROM entries WHERE ${where} AND type IN ('income','expense') GROUP BY type, category`,params);
@@ -51,17 +53,20 @@ export async function getAdviceContext(connection,userId,{topic,localNow}) {
     // so the coach can distinguish recent trends from stale measurements.
     const weight=await queryRecords(connection,userId,{...base,type:'weight',date_from:null});
     context.health={date_from:dateFrom,date_to:today,food,exercise,weight,
-      weight_comparison:compareWeights(weight.rows,localNow)};
+      weight_comparison:compareWeights(weight.rows,localNow),protein_daily:await getDailyTotals(connection,userId,today)};
   }
   return context;
 }
 export async function getDailyTotals(connection,userId,date) {
   const [rows]=await connection.execute(`SELECT type, SUM(amount) AS amount_total, SUM(calories) AS calories_total,
-    SUM(calories_source = 'estimated') AS estimated_count, SUM(calories IS NULL) AS unknown_count
+    SUM(calories_source = 'estimated') AS estimated_count, SUM(calories IS NULL) AS unknown_count,
+    SUM(protein_grams) AS protein_total_g, SUM(protein_source = 'estimated') AS protein_estimated_count, SUM(protein_grams IS NULL) AS protein_unknown_count
     FROM entries WHERE line_user_id = ? AND entry_date = ? AND type IN ('income','expense','food') GROUP BY type`,[userId,date]);
   const expense=rows.find(r=>r.type==='expense'),food=rows.find(r=>r.type==='food');
   return {date,expense_total:expense?.amount_total ?? '0.00',food_calories_total:food?.calories_total ?? '0.00',
-    food_estimated_count:Number(food?.estimated_count ?? 0),food_unknown_count:Number(food?.unknown_count ?? 0)};
+    food_estimated_count:Number(food?.estimated_count ?? 0),food_unknown_count:Number(food?.unknown_count ?? 0),
+    food_protein_total_g:food?.protein_total_g ?? '0.00',food_protein_estimated_count:Number(food?.protein_estimated_count ?? 0),
+    food_protein_unknown_count:Number(food?.protein_unknown_count ?? 0)};
 }
 
 export function compareWeights(rows,localNow) {
@@ -69,7 +74,8 @@ export function compareWeights(rows,localNow) {
   const previous=latest ? rows.find(r=>r.entry_date<latest.entry_date) ?? null : null;
   const age=latest ? Math.max(0,Math.floor((Date.parse(localNow.slice(0,10)+'T00:00:00Z')-Date.parse(latest.entry_date+'T00:00:00Z'))/86400000)) : null;
   return {latest,previous,change_kg:previous?Number((Number(latest.weight_kg)-Number(previous.weight_kg)).toFixed(3)):null,
-    days_since_update:age,is_stale:age!==null && age>=7,stale_after_days:7};
+    days_since_update:age,is_stale:age!==null && age>=7,stale_after_days:7,
+    protein_target_g:latest?Math.round(Number(latest.weight_kg)*1.5*100)/100:null,protein_target_factor:1.5};
 }
 
 export async function getWeightContext(connection,userId,localNow) {
@@ -84,7 +90,7 @@ export async function getOverviewContext(connection,userId,q,localNow) {
   const {where,params}=filter(userId,filters);
   // Sample each type separately so many expense records cannot hide food/weight.
   const [samples]=await connection.execute(`SELECT type, title, details, amount, category, quantity, unit,
-    duration_minutes, calories, calories_source, calorie_note, weight_kg, occurred_at, entry_date FROM (
+    duration_minutes, calories, calories_source, calorie_note, protein_grams, protein_source, protein_note, weight_kg, occurred_at, entry_date FROM (
     SELECT entries.*, ROW_NUMBER() OVER (PARTITION BY type ORDER BY occurred_at DESC, id DESC) AS sample_number
     FROM entries WHERE ${where}) AS ranked WHERE sample_number <= 5 ORDER BY type, occurred_at DESC`,params);
   return {as_of:localNow,period:filters,result,samples,sample_limit_per_type:5,

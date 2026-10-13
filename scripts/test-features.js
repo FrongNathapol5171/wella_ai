@@ -9,10 +9,17 @@ const text='กินข้าวผัด 2 จาน และวิ่ง 30 
 const p=validatePlan(await llm.plan({text,pending:null,localNow}),text);
 assert.equal(p.intent,'record');assert.equal(p.records.length,2);
 assert.ok(p.records.every(r=>r.calories===null && r.calories_source===null));
-const weight={latest:{weight_kg:'65.200',entry_date:'2026-10-13'},previous:null,change_kg:null,is_stale:false,days_since_update:0};
+const weight={latest:{weight_kg:'65.200',entry_date:'2026-10-13'},previous:null,change_kg:null,is_stale:false,days_since_update:0,protein_target_g:97.8};
 const estimates=await llm.estimateCalories({records:p.records.map((r,index)=>({...r,index})),weight});
 assert.deepEqual(estimates.items.map(r=>r.index).sort(),[0,1]);
 for(const item of estimates.items){assert.ok(item.calories>0);assert.ok(item.note?.length>0);}
+const foodIndex=p.records.findIndex(r=>r.type==='food');
+assert.ok(estimates.items.find(r=>r.index===foodIndex).protein_grams>0);
+assert.ok(estimates.items.find(r=>r.index===foodIndex).protein_note);
+assert.equal(estimates.items.find(r=>r.index!==foodIndex).protein_grams,null);
+const proteinText='กินนม โปรตีน 30 กรัม';
+const provided=validatePlan(await llm.plan({text:proteinText,pending:null,localNow}),proteinText);
+assert.equal(provided.records[0].protein_grams,30);assert.equal(provided.records[0].protein_source,'provided');
 console.log('PASS: food/exercise extraction and labelled calorie estimates');
 const question='สรุปวันนี้';
 const overview=validatePlan(await llm.plan({text:question,pending:null,localNow}),question);
@@ -22,14 +29,15 @@ const context={as_of:localNow,period:overview.query,
   result:{total_count:7,rows:[],summary:[
     {type:'income',count:1,amount_total:'1000.00'},
     {type:'expense',count:2,amount_total:'650.00'},
-    {type:'food',count:3,calories_total:'1300.00',calories_estimated_count:1,calories_unknown_count:1},
+    {type:'food',count:3,calories_total:'1300.00',calories_estimated_count:1,calories_unknown_count:1,protein_total_g:'50.00',protein_estimated_count:1,protein_unknown_count:1},
     {type:'exercise',count:1,minutes_total:'30.00',calories_total:'300.00',calories_estimated_count:0,calories_unknown_count:0}
   ],categories:[],food_units:[],truncated:true},samples:[],sample_limit_per_type:5,
-  weight_context:{latest:{weight_kg:'65.200',entry_date:'2026-09-01'},previous:null,change_kg:null,days_since_update:42,is_stale:true,stale_after_days:7}};
+  weight_context:{latest:{weight_kg:'65.200',entry_date:'2026-09-01'},previous:null,change_kg:null,days_since_update:42,is_stale:true,stale_after_days:7,protein_target_g:97.8,protein_target_factor:1.5}};
 const reply=formatLineText(await llm.overview({question,context}));
 assert.ok(reply.includes('\n\n'));
 assert.match(reply,/^• /m);assert.match(reply,/สรุป/);
 assert.match(reply.replace(/,/g,''),/1300/);assert.match(reply,/ประมาณ|ประเมิน/);assert.match(reply,/อัปเดต|ชั่ง|วัด/);
+assert.match(reply,/โปรตีน/);
 assert.ok(!/[#*`|]/.test(reply));
 console.log('PASS: all-type overview, approximate food energy, weight-update reminder and LINE layout');
 console.log(reply);

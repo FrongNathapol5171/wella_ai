@@ -20,6 +20,7 @@ export const DDL=[
     title VARCHAR(255) NOT NULL, details TEXT NULL, amount DECIMAL(15,2) NULL, category VARCHAR(100) NULL,
     quantity DECIMAL(12,3) NULL, unit VARCHAR(50) NULL, duration_minutes DECIMAL(12,2) NULL,
     calories DECIMAL(12,2) NULL, calories_source ENUM('provided','estimated') NULL, calorie_note VARCHAR(500) NULL,
+    protein_grams DECIMAL(12,2) NULL, protein_source ENUM('provided','estimated') NULL, protein_note VARCHAR(500) NULL,
     weight_kg DECIMAL(10,3) NULL, occurred_at DATETIME NOT NULL,
     entry_date DATE GENERATED ALWAYS AS (DATE(occurred_at)) STORED,
     entry_time TIME GENERATED ALWAYS AS (TIME(occurred_at)) STORED,
@@ -79,7 +80,8 @@ export function createDatabase(config) {
 export async function migrateCalories(pool) {
   const [columns]=await pool.query('SHOW COLUMNS FROM entries');
   const names=new Set(columns.map(c=>c.Field));
-  for(const [name,definition] of [['calories_source',"ENUM('provided','estimated') NULL"],['calorie_note','VARCHAR(500) NULL']]) {
+  for(const [name,definition] of [['calories_source',"ENUM('provided','estimated') NULL"],['calorie_note','VARCHAR(500) NULL'],
+    ['protein_grams','DECIMAL(12,2) NULL'],['protein_source',"ENUM('provided','estimated') NULL"],['protein_note','VARCHAR(500) NULL']]) {
     if(names.has(name)) continue;
     try{await pool.query(`ALTER TABLE entries ADD COLUMN ${name} ${definition}`);}
     catch(error){if(error.code!=='ER_DUP_FIELDNAME') throw error;}

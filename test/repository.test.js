@@ -20,7 +20,7 @@ test('latest deletion scopes user and type and returns actual row count',async()
 test('all inserts include trusted user and event IDs',async()=>{
   const calls=[];const connection={execute:async(sql,params)=>{calls.push({sql,params});return [{}];}};
   assert.equal(await insertRecords(connection,'user-A','event-1',[record(),record()]),2);
-  assert.equal(calls[0].params.length,16);assert.deepEqual(calls[1].params.slice(0,3),['user-A','event-1',1]);
+  assert.equal(calls[0].params.length,19);assert.deepEqual(calls[1].params.slice(0,3),['user-A','event-1',1]);
 });
 test('finance context scopes only income and expenses to the current calendar month',async()=>{
   const calls=[];const connection={execute:async(sql,params)=>{calls.push({sql,params});return [[]];}};
@@ -38,7 +38,7 @@ test('health context includes a 30-day window and compares weights on different 
   const context=await getAdviceContext(connection,'user-A',{topic:'health',localNow:'2026-10-13 12:00:00'});
   assert.equal(context.finance,null);assert.equal(context.health.date_from,'2026-09-14');
   assert.equal(context.health.weight_comparison.change_kg,-0.8);assert.equal(context.health.weight_comparison.previous.entry_date,'2026-10-06');
-  for(const {sql,params} of calls){assert.match(sql,/WHERE line_user_id = \?/);assert.equal(params[0],'user-A');assert.ok(['food','exercise','weight'].includes(params[1]));}
+  for(const {sql,params} of calls){assert.match(sql,/WHERE line_user_id = \?/);assert.equal(params[0],'user-A');assert.ok(['food','exercise','weight','2026-10-13'].includes(params[1]));}
 });
 test('single weight record does not invent a trend',async()=>{
   const connection={execute:async(sql,params)=>[sql.startsWith('SELECT id') && params[1]==='weight'?[{weight_kg:'65.200',entry_date:'2026-10-13'}]:[]]};
@@ -56,5 +56,6 @@ test('daily totals include all matching rows and filter trusted user and local d
 test('weight staleness means missing progress evidence, not a fabricated lack of progress',()=>{
   const result=compareWeights([{entry_date:'2026-10-01',weight_kg:'65.2'}],'2026-10-13 12:00:00');
   assert.equal(result.days_since_update,12);assert.equal(result.is_stale,true);assert.equal(result.change_kg,null);
+  assert.equal(result.protein_target_g,97.8);assert.equal(compareWeights([],'2026-10-13 12:00:00').protein_target_g,null);
   assert.equal(compareWeights([],'2026-10-13 12:00:00').days_since_update,null);
 });

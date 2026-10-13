@@ -58,6 +58,16 @@ test('calorie provenance is required and only labelled estimates may lack numeri
   for(const overrides of [{calories_source:'provided'},{calorie_note:null},{calories_source:null},{calories:-1}])
     assert.throws(()=>validatePlan(plan({records:[{...food,...overrides}]}),'กินข้าวผัด'),InputError);
 });
+test('explicit protein requires food, a protein label and numerical evidence',()=>{
+  const r=record({type:'food',title:'นม',amount:null,category:null,protein_grams:30,source_quote:'กินนม โปรตีน 30 กรัม'});
+  assert.equal(validatePlan(plan({records:[r]}),r.source_quote).records[0].protein_source,'provided');
+  for(const overrides of [{protein_grams:40},{protein_source:null},{type:'exercise'},{source_quote:'กินนม 30 กรัม'}])
+    assert.throws(()=>validatePlan(plan({records:[{...r,...overrides}]}),'กินนม โปรตีน 30 กรัม\nกินนม 30 กรัม'),InputError);
+});
+test('explicit per-serving protein is multiplied only by the stated quantity',()=>{
+  const r=record({type:'food',title:'นม',amount:null,category:null,quantity:2,unit:'กล่อง',protein_grams:60,source_quote:'กินนม 2 กล่อง โปรตีนต่อกล่อง 30 กรัม'});
+  assert.equal(validatePlan(plan({records:[r]}),r.source_quote).records[0].protein_grams,60);
+});
 test('custom URL is validated and defaults correctly',()=>{
   const env={LINE_CHANNEL_SECRET:'s',LINE_CHANNEL_ACCESS_TOKEN:'t',OPENAI_API_KEY:'k',MYSQL_HOST:'localhost',MYSQL_USER:'root',MYSQL_DATABASE:'tracker'};
   assert.equal(readConfig(env).OPENAI_BASE_URL,'https://api.openai.com/v1');
