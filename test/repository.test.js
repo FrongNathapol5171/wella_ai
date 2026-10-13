@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { queryRecords, deleteLatest, insertRecords, getAdviceContext } from '../src/repository.js';
+import { queryRecords, deleteLatest, insertRecords, getAdviceContext, getDailyTotals, compareWeights } from '../src/repository.js';
 import { query, record } from './helpers.js';
 test('every query is parameterized and user-scoped including all aggregates',async()=>{
   const calls=[];
@@ -20,7 +20,7 @@ test('latest deletion scopes user and type and returns actual row count',async()
 test('all inserts include trusted user and event IDs',async()=>{
   const calls=[];const connection={execute:async(sql,params)=>{calls.push({sql,params});return [{}];}};
   assert.equal(await insertRecords(connection,'user-A','event-1',[record(),record()]),2);
-  assert.equal(calls[0].params.length,14);assert.deepEqual(calls[1].params.slice(0,3),['user-A','event-1',1]);
+  assert.equal(calls[0].params.length,16);assert.deepEqual(calls[1].params.slice(0,3),['user-A','event-1',1]);
 });
 test('finance context scopes only income and expenses to the current calendar month',async()=>{
   const calls=[];const connection={execute:async(sql,params)=>{calls.push({sql,params});return [[]];}};
@@ -44,4 +44,17 @@ test('single weight record does not invent a trend',async()=>{
   const connection={execute:async(sql,params)=>[sql.startsWith('SELECT id') && params[1]==='weight'?[{weight_kg:'65.200',entry_date:'2026-10-13'}]:[]]};
   const result=await getAdviceContext(connection,'user-A',{topic:'weight',localNow:'2026-10-13 12:00:00'});
   assert.equal(result.health.weight_comparison.previous,null);assert.equal(result.health.weight_comparison.change_kg,null);
+});
+test('daily totals include all matching rows and filter trusted user and local date',async()=>{
+  let call;const connection={execute:async(sql,params)=>{call={sql,params};return [[
+    {type:'expense',amount_total:'1234.56'}, {type:'food',calories_total:'1800.00',estimated_count:'2',unknown_count:'1'}
+  ]];}};
+  const totals=await getDailyTotals(connection,'user-A','2026-10-13');
+  assert.deepEqual(call.params,['user-A','2026-10-13']);assert.match(call.sql,/line_user_id = \? AND entry_date = \?/);assert.ok(!call.sql.includes('LIMIT'));
+  assert.equal(totals.food_calories_total,'1800.00');assert.equal(totals.expense_total,'1234.56');assert.equal(totals.food_estimated_count,2);
+});
+test('weight staleness means missing progress evidence, not a fabricated lack of progress',()=>{
+  const result=compareWeights([{entry_date:'2026-10-01',weight_kg:'65.2'}],'2026-10-13 12:00:00');
+  assert.equal(result.days_since_update,12);assert.equal(result.is_stale,true);assert.equal(result.change_kg,null);
+  assert.equal(compareWeights([],'2026-10-13 12:00:00').days_since_update,null);
 });

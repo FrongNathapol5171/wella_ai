@@ -8,9 +8,9 @@ function filter(userId,q) {
   return {where:clauses.join(' AND '),params};
 }
 export async function insertRecords(connection,userId,eventId,records) {
-  const fields=['type','title','details','amount','category','quantity','unit','duration_minutes','calories','weight_kg','occurred_at'];
+  const fields=['type','title','details','amount','category','quantity','unit','duration_minutes','calories','calories_source','calorie_note','weight_kg','occurred_at'];
   for(const [index,record] of records.entries()) {
-    await connection.execute(`INSERT INTO entries (line_user_id, event_id, item_index, ${fields.join(', ')}) VALUES (${Array(14).fill('?').join(', ')})`,
+    await connection.execute(`INSERT INTO entries (line_user_id, event_id, item_index, ${fields.join(', ')}) VALUES (${Array(fields.length+3).fill('?').join(', ')})`,
       [userId,eventId,index,...fields.map(f=>record[f])]);
   }
   return records.length;
@@ -21,9 +21,10 @@ export async function deleteLatest(connection,userId,{type,count}) {
 }
 export async function queryRecords(connection,userId,q) {
   const {where,params}=filter(userId,q),limit=q.mode==='latest'?1:q.limit;
-  const [rows]=await connection.execute(`SELECT id, type, title, details, amount, category, quantity, unit, duration_minutes, calories, weight_kg, occurred_at, entry_date, entry_time, entry_year, entry_month, entry_day, weekday_text FROM entries WHERE ${where} ORDER BY occurred_at DESC, id DESC LIMIT ${limit}`,params);
+  const [rows]=await connection.execute(`SELECT id, type, title, details, amount, category, quantity, unit, duration_minutes, calories, calories_source, calorie_note, weight_kg, occurred_at, entry_date, entry_time, entry_year, entry_month, entry_day, weekday_text FROM entries WHERE ${where} ORDER BY occurred_at DESC, id DESC LIMIT ${limit}`,params);
   const [summary]=await connection.execute(`SELECT type, COUNT(*) AS count, SUM(amount) AS amount_total,
-    SUM(duration_minutes) AS minutes_total, SUM(calories) AS calories_total, COUNT(calories) AS calories_known_count
+    SUM(duration_minutes) AS minutes_total, SUM(calories) AS calories_total, COUNT(calories) AS calories_known_count,
+    SUM(calories_source = 'estimated') AS calories_estimated_count, SUM(calories IS NULL) AS calories_unknown_count
     FROM entries WHERE ${where} GROUP BY type`,params);
   const [categories]=await connection.execute(`SELECT type, category, COUNT(*) AS count, SUM(amount) AS amount_total
     FROM entries WHERE ${where} AND type IN ('income','expense') GROUP BY type, category`,params);
@@ -49,12 +50,44 @@ export async function getAdviceContext(connection,userId,{topic,localNow}) {
     // Weight samples may be older than the activity window; include their dates
     // so the coach can distinguish recent trends from stale measurements.
     const weight=await queryRecords(connection,userId,{...base,type:'weight',date_from:null});
-    const latest=weight.rows[0] ?? null;
-    const previous=latest ? weight.rows.find(row=>row.entry_date<latest.entry_date) ?? null : null;
-    const change=latest && previous ? Number((Number(latest.weight_kg)-Number(previous.weight_kg)).toFixed(3)) : null;
     context.health={date_from:dateFrom,date_to:today,food,exercise,weight,
-      weight_comparison:{latest,previous,change_kg:change}};
+      weight_comparison:compareWeights(weight.rows,localNow)};
   }
   return context;
 }
-export const repository={insertRecords,deleteLatest,queryRecords,getAdviceContext};
+export async function getDailyTotals(connection,userId,date) {
+  const [rows]=await connection.execute(`SELECT type, SUM(amount) AS amount_total, SUM(calories) AS calories_total,
+    SUM(calories_source = 'estimated') AS estimated_count, SUM(calories IS NULL) AS unknown_count
+    FROM entries WHERE line_user_id = ? AND entry_date = ? AND type IN ('income','expense','food') GROUP BY type`,[userId,date]);
+  const expense=rows.find(r=>r.type==='expense'),food=rows.find(r=>r.type==='food');
+  return {date,expense_total:expense?.amount_total ?? '0.00',food_calories_total:food?.calories_total ?? '0.00',
+    food_estimated_count:Number(food?.estimated_count ?? 0),food_unknown_count:Number(food?.unknown_count ?? 0)};
+}
+
+export function compareWeights(rows,localNow) {
+  const latest=rows[0] ?? null;
+  const previous=latest ? rows.find(r=>r.entry_date<latest.entry_date) ?? null : null;
+  const age=latest ? Math.max(0,Math.floor((Date.parse(localNow.slice(0,10)+'T00:00:00Z')-Date.parse(latest.entry_date+'T00:00:00Z'))/86400000)) : null;
+  return {latest,previous,change_kg:previous?Number((Number(latest.weight_kg)-Number(previous.weight_kg)).toFixed(3)):null,
+    days_since_update:age,is_stale:age!==null && age>=7,stale_after_days:7};
+}
+
+export async function getWeightContext(connection,userId,localNow) {
+  const [rows]=await connection.execute(`SELECT weight_kg, occurred_at, entry_date FROM entries
+    WHERE line_user_id = ? AND type = 'weight' AND occurred_at <= ? ORDER BY occurred_at DESC, id DESC LIMIT 10`,[userId,localNow]);
+  return compareWeights(rows,localNow);
+}
+
+export async function getOverviewContext(connection,userId,q,localNow) {
+  const filters={...q,type:null,mode:'summary',category:null,keyword:null};
+  const result=await queryRecords(connection,userId,filters);
+  const {where,params}=filter(userId,filters);
+  // Sample each type separately so many expense records cannot hide food/weight.
+  const [samples]=await connection.execute(`SELECT type, title, details, amount, category, quantity, unit,
+    duration_minutes, calories, calories_source, calorie_note, weight_kg, occurred_at, entry_date FROM (
+    SELECT entries.*, ROW_NUMBER() OVER (PARTITION BY type ORDER BY occurred_at DESC, id DESC) AS sample_number
+    FROM entries WHERE ${where}) AS ranked WHERE sample_number <= 5 ORDER BY type, occurred_at DESC`,params);
+  return {as_of:localNow,period:filters,result,samples,sample_limit_per_type:5,
+    weight_context:await getWeightContext(connection,userId,localNow)};
+}
+export const repository={insertRecords,deleteLatest,queryRecords,getAdviceContext,getDailyTotals,getWeightContext,getOverviewContext};

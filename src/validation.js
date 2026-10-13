@@ -22,9 +22,16 @@ export function validatePlan(input,text) {
       if (!text.includes(r.source_quote)) throw new InputError('ข้อมูลไม่ตรงข้อความ กรุณาระบุรายการอีกครั้ง');
       if (r.type!=='weight' && !r.source_quote.includes(r.title)) throw new InputError('กรุณาระบุชื่อรายการให้ชัดเจน');
       if (r.details!==null && !r.source_quote.includes(r.details)) throw new InputError('รายละเอียดไม่ตรงข้อความ กรุณาส่งใหม่');
-      const allowed={income:['amount','category'],expense:['amount','category'],food:['quantity','unit'],exercise:['duration_minutes','calories'],weight:['weight_kg']}[r.type];
+      const allowed={income:['amount','category'],expense:['amount','category'],food:['quantity','unit','calories'],exercise:['duration_minutes','calories'],weight:['weight_kg']}[r.type];
       for (const field of ['amount','category','quantity','unit','duration_minutes','calories','weight_kg']) {
         if (!allowed.includes(field) && r[field]!==null) throw new InputError('พบข้อมูลผิดประเภท กรุณาส่งรายการอีกครั้ง');
+      }
+      if(r.calories===null) {
+        if(r.calories_source!==null || r.calorie_note!==null) throw new InputError('ข้อมูลแคลอรีไม่ครบ กรุณาส่งรายการอีกครั้ง');
+      } else {
+        if(r.calories<0 || r.calories>100000 || !r.calories_source) throw new InputError('กรุณาระบุแคลอรีให้ถูกต้อง');
+        if(r.calories_source==='provided' && !hasNumber(r.calories,r.source_quote) && !(r.type==='food' && /ต่อ|per/i.test(r.source_quote) && hasNumber(r.calories,r.source_quote,r.quantity??1))) throw new InputError('แคลอรีที่ระบุไม่ตรงข้อความ');
+        if(r.calories_source==='estimated' && (!['food','exercise'].includes(r.type) || !r.calorie_note?.trim())) throw new InputError('ค่าประเมินแคลอรีต้องมีคำอธิบาย');
       }
       if (['income','expense'].includes(r.type)) {
         positive(r.amount,'จำนวนเงิน');
@@ -39,7 +46,6 @@ export function validatePlan(input,text) {
       if (r.type==='exercise') {
         positive(r.duration_minutes,'เวลาออกกำลังกาย (นาที)');
         if (!hasNumber(r.duration_minutes,r.source_quote) && !(/ชั่วโมง|hours?/.test(r.source_quote) && hasNumber(r.duration_minutes,r.source_quote,60))) throw new InputError('กรุณาระบุเวลาออกกำลังกาย');
-        if (r.calories!==null && (r.calories<0 || !hasNumber(r.calories,r.source_quote))) throw new InputError('กรุณาระบุแคลอรี หรือไม่ระบุก็ได้');
       }
       if (r.type==='weight') {
         positive(r.weight_kg,'น้ำหนัก (กิโลกรัม)',9999999.999);
@@ -47,9 +53,10 @@ export function validatePlan(input,text) {
       }
     }
   }
-  if (plan.intent==='query') {
+  if (plan.intent==='query' || plan.intent==='overview') {
     if (!plan.query || plan.deletion) throw new InputError('กรุณาระบุข้อมูลที่ต้องการดู');
     const q=plan.query;
+    if(plan.intent==='overview') {q.type=null;q.mode='summary';q.category=null;q.keyword=null;}
     for (const d of [q.date_from,q.date_to]) if (d!==null && !validDate(d)) throw new InputError('กรุณาระบุวันที่ให้ถูกต้อง');
     if (q.date_from && q.date_to && q.date_from>q.date_to) throw new InputError('วันที่เริ่มต้องไม่เกินวันที่สิ้นสุด');
   }

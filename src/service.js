@@ -2,6 +2,8 @@ import { InputError, validatePlan } from './validation.js';
 import { localTimestamp, typeLabels } from './time.js';
 import { repository } from './repository.js';
 import { HELP_REPLY } from './help.js';
+import { recordFeedback } from './record-feedback.js';
+import { calorieEstimateSchema } from './schema.js';
 export function createService({db,llm,timeZone='Asia/Bangkok',repo=repository}) {
   return {
     async process(event) {
@@ -21,8 +23,27 @@ export function createService({db,llm,timeZone='Asia/Bangkok',repo=repository}) 
           switch(plan.intent) {
             case 'help': reply=HELP_REPLY;nextPending=pending;break;
             case 'record': {
-              const count=await repo.insertRecords(connection,userId,eventId,plan.records);
-              reply=count===1?'บันทึกเรียบร้อยค่ะ':`บันทึกเรียบร้อย ${count} รายการค่ะ`; break;
+              const localNow=localTimestamp(event.timestamp,timeZone);
+              const missing=plan.records.map((r,index)=>({...r,index})).filter(r=>['food','exercise'].includes(r.type) && r.calories===null);
+              if(missing.length && llm.estimateCalories) {
+                const weight=missing.some(r=>r.type==='exercise')?await repo.getWeightContext(connection,userId,localNow):null;
+                try {
+                  const estimates=calorieEstimateSchema.parse(await llm.estimateCalories({records:missing,weight,signal}));
+                  const seen=new Set();
+                  for(const item of estimates.items) {
+                    if(seen.has(item.index) || !missing.some(r=>r.index===item.index)) throw new Error('Invalid estimate index');
+                    seen.add(item.index);
+                    if(item.calories!==null && !item.note?.trim()) throw new Error('Missing calorie assumptions');
+                  }
+                  for(const item of estimates.items) if(item.calories!==null) {
+                    Object.assign(plan.records[item.index],{calories:Math.round(item.calories),calories_source:'estimated',calorie_note:item.note});
+                  }
+                } catch { /* Save the actual record even if optional estimation fails; never store zero as unknown. */ }
+              }
+              await repo.insertRecords(connection,userId,eventId,plan.records);
+              const needsTotals=plan.records.some(r=>['income','expense','food'].includes(r.type));
+              const totals=needsTotals?await repo.getDailyTotals(connection,userId,localNow.slice(0,10)):null;
+              reply=recordFeedback(plan.records,totals); break;
             }
             case 'delete': {
               const count=await repo.deleteLatest(connection,userId,plan.deletion);
@@ -31,6 +52,10 @@ export function createService({db,llm,timeZone='Asia/Bangkok',repo=repository}) 
             case 'query': {
               const result=await repo.queryRecords(connection,userId,plan.query);
               reply=result.total_count===0?'ยังไม่มีข้อมูลในช่วงที่ถามค่ะ':await llm.answer({question:text,result,signal});break;
+            }
+            case 'overview': {
+              const context=await repo.getOverviewContext(connection,userId,plan.query,localTimestamp(event.timestamp,timeZone));
+              reply=await llm.overview({question:text,context,signal});break;
             }
             case 'advice': {
               const localNow=localTimestamp(event.timestamp,timeZone);

@@ -19,7 +19,8 @@ export const DDL=[
     type ENUM('income','expense','food','exercise','weight') NOT NULL,
     title VARCHAR(255) NOT NULL, details TEXT NULL, amount DECIMAL(15,2) NULL, category VARCHAR(100) NULL,
     quantity DECIMAL(12,3) NULL, unit VARCHAR(50) NULL, duration_minutes DECIMAL(12,2) NULL,
-    calories DECIMAL(12,2) NULL, weight_kg DECIMAL(10,3) NULL, occurred_at DATETIME NOT NULL,
+    calories DECIMAL(12,2) NULL, calories_source ENUM('provided','estimated') NULL, calorie_note VARCHAR(500) NULL,
+    weight_kg DECIMAL(10,3) NULL, occurred_at DATETIME NOT NULL,
     entry_date DATE GENERATED ALWAYS AS (DATE(occurred_at)) STORED,
     entry_time TIME GENERATED ALWAYS AS (TIME(occurred_at)) STORED,
     entry_year SMALLINT GENERATED ALWAYS AS (YEAR(occurred_at)) STORED,
@@ -53,6 +54,7 @@ export function createDatabase(config) {
       pool??=mysql.createPool({...mysqlOptions(config),database:config.MYSQL_DATABASE,connectionLimit:config.MYSQL_POOL_SIZE,
         waitForConnections:true,queueLimit:20,enableKeepAlive:true,maxIdle:config.MYSQL_POOL_SIZE,idleTimeout:60000});
       for (const ddl of DDL) await pool.query(ddl);
+      await migrateCalories(pool);
     })().catch(error=>{initialization=undefined;throw error;});
     return initialization;
   }
@@ -72,4 +74,16 @@ export function createDatabase(config) {
     },
     async close() { if(pool) await pool.end(); pool=undefined; initialization=undefined; }
   };
+}
+
+export async function migrateCalories(pool) {
+  const [columns]=await pool.query('SHOW COLUMNS FROM entries');
+  const names=new Set(columns.map(c=>c.Field));
+  for(const [name,definition] of [['calories_source',"ENUM('provided','estimated') NULL"],['calorie_note','VARCHAR(500) NULL']]) {
+    if(names.has(name)) continue;
+    try{await pool.query(`ALTER TABLE entries ADD COLUMN ${name} ${definition}`);}
+    catch(error){if(error.code!=='ER_DUP_FIELDNAME') throw error;}
+  }
+  // Previous versions only accepted explicitly supplied exercise calories.
+  await pool.query("UPDATE entries SET calories_source = 'provided' WHERE calories IS NOT NULL AND calories_source IS NULL");
 }

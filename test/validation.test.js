@@ -47,6 +47,17 @@ test('advice is read-only and cannot be mixed with writes, queries, or deletion'
   for(const overrides of [{records:[record()]},{query:query()},{deletion:{type:'expense',count:1}},{advice_topic:null}])
     assert.throws(()=>validatePlan({...p,...overrides},'แนะนำหน่อย'),InputError);
 });
+test('overview clears type/category filters and validates the calendar range',()=>{
+  const p=plan({intent:'overview',records:[],query:query({type:'expense',category:'อาหาร',keyword:'กาแฟ',date_from:'2026-10-01',date_to:'2026-10-13'})});
+  const result=validatePlan(p,'สรุปเดือนนี้');assert.equal(result.query.type,null);assert.equal(result.query.category,null);assert.equal(result.query.keyword,null);
+  assert.throws(()=>validatePlan({...p,query:query({date_from:'2026-10-14',date_to:'2026-10-13'})},'สรุป'),InputError);
+});
+test('calorie provenance is required and only labelled estimates may lack numerical evidence',()=>{
+  const food=record({type:'food',title:'ข้าวผัด',amount:null,category:null,quantity:1,unit:'หน่วย',calories:600,calories_source:'estimated',calorie_note:'ขนาดทั่วไป 1 ที่',source_quote:'กินข้าวผัด'});
+  assert.equal(validatePlan(plan({records:[food]}),'กินข้าวผัด').records[0].calories_source,'estimated');
+  for(const overrides of [{calories_source:'provided'},{calorie_note:null},{calories_source:null},{calories:-1}])
+    assert.throws(()=>validatePlan(plan({records:[{...food,...overrides}]}),'กินข้าวผัด'),InputError);
+});
 test('custom URL is validated and defaults correctly',()=>{
   const env={LINE_CHANNEL_SECRET:'s',LINE_CHANNEL_ACCESS_TOKEN:'t',OPENAI_API_KEY:'k',MYSQL_HOST:'localhost',MYSQL_USER:'root',MYSQL_DATABASE:'tracker'};
   assert.equal(readConfig(env).OPENAI_BASE_URL,'https://api.openai.com/v1');

@@ -9,7 +9,7 @@ const cases=[
   ['วิ่ง','clarify'],['จ่ายค่ากาแฟ','clarify'],['เดือนนี้จ่ายไปเท่าไร','query'],['ลบรายจ่ายล่าสุด 3 แถว','delete'],
   ['พรุ่งนี้จะกินข้าวผัด','chat'],['ไม่ได้กินข้าวผัด','chat'],
   ['แนะนำด้านการเงินหน่อย','advice'],['แนะนำด้านสุขภาพหน่อย','advice'],
-  ['ช่วยทำอะไรได้บ้าง','help'],['มีฟังก์ชั่นอะไรบ้าง','help']
+  ['ช่วยทำอะไรได้บ้าง','help'],['มีฟังก์ชั่นอะไรบ้าง','help'],['สรุปวันนี้','overview'],['สรุปเดือนนี้','overview']
 ];
 for(const [text,intent,type] of cases) {
   const p=validatePlan(await llm.plan({text,pending:null,localNow:'2026-10-13 12:00:00'}),text);
